@@ -1,0 +1,7 @@
+# Versão NÃO otimizada, usada só para comparar o tamanho das imagens.
+# Usa a imagem Python completa (~1 GB), roda como root e usa o servidor de desenvolvimento.
+FROM python:3.12
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD ["python", "app.py"]

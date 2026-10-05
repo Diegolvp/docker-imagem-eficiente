@@ -1,0 +1,11 @@
+# Envia ao Docker apenas o necessário para o build (contexto menor = build mais rápido)
+.git
+.github
+.devcontainer
+__pycache__
+*.pyc
+.venv
+venv
+*.md
+Dockerfile*
+.dockerignore
