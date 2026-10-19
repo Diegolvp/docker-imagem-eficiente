@@ -77,9 +77,11 @@ services:
 networks:
   # Rede onde fica a aplicação exposta ao host.
   frontend:
-  # Rede interna: só os containers conversam entre si, sem acesso externo.
+  # Rede dos serviços internos (banco e cache). Eles não publicam portas,
+  # então só são acessíveis pelos containers ligados a esta rede.
+  # Obs.: "internal: true" bloquearia também a saída para a internet, mas no
+  # Codespaces (Docker dentro de container) isso trava a conexão entre os serviços.
   backend:
-    internal: true
 
 # ---------- VOLUMES ----------
 volumes:

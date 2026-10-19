@@ -18,7 +18,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://app:app@localhost:54
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "60"))
 
-cache = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+# Timeouts curtos: se o Redis não responder, a requisição falha rápido em vez de travar.
+cache = redis.Redis.from_url(
+    REDIS_URL, decode_responses=True, socket_connect_timeout=2, socket_timeout=2
+)
 
 
 def db():

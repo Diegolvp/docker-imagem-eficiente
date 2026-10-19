@@ -27,7 +27,7 @@ Rotas: `/` (informações + contador de visitas no Redis), `/converter?celsius=2
 | `db` | `postgres:16-alpine` | `backend` | `pgdata` | `unless-stopped` |
 | `cache` | `redis:7-alpine` | `backend` | `redisdata` | `unless-stopped` |
 
-- **Redes:** `frontend` é onde a API fica publicada na porta 8000. `backend` é `internal: true`: banco e cache não têm porta exposta nem acesso externo, e só a app fala com eles.
+- **Redes:** `frontend` é onde a API fica publicada na porta 8000. `backend` liga a app ao banco e ao cache, que não publicam porta nenhuma: de fora do Docker não dá para acessá-los, só a app fala com eles.
 - **Volumes:** `pgdata` e `redisdata` são volumes nomeados, então os dados sobrevivem a `docker compose down`. O `init.sql` entra como bind mount somente leitura.
 - **Ordem de subida:** `depends_on` com `condition: service_healthy` faz a app esperar o Postgres (`pg_isready`) e o Redis (`redis-cli ping`) ficarem saudáveis.
 - **Restart:** `unless-stopped` reinicia o container se ele cair ou se o Docker reiniciar, menos quando você o para de propósito.
