@@ -1,0 +1,87 @@
+# =============================================================================
+# Docker Compose: API de temperatura + PostgreSQL + Redis
+#   Subir:     docker compose up -d --build
+#   Status:    docker compose ps
+#   Derrubar:  docker compose down        (mantém os dados nos volumes)
+#              docker compose down -v     (apaga também os volumes)
+# =============================================================================
+
+services:
+  # ---------- APLICAÇÃO ----------
+  # Usa a imagem otimizada da atividade anterior (Dockerfile multi-stage).
+  # "build" constrói a partir do Dockerfile; "image" dá nome/tag à imagem gerada.
+  app:
+    build: .
+    image: docker-imagem-eficiente:1.0
+    container_name: temperatura-app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://cache:6379/0
+      CACHE_TTL: "60"
+    # Só inicia depois que banco e cache passarem no healthcheck.
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    # Reinicia sozinho se cair; só não volta se for parado manualmente.
+    restart: unless-stopped
+    # O HEALTHCHECK já vem definido no Dockerfile (rota /health).
+
+  # ---------- BANCO DE DADOS ----------
+  db:
+    image: postgres:16-alpine
+    container_name: temperatura-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      # Volume nomeado: os dados sobrevivem a "docker compose down".
+      - pgdata:/var/lib/postgresql/data
+      # Script que cria a tabela na primeira subida (somente leitura).
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
+    # Sem "ports": o banco NÃO fica exposto fora do Docker.
+
+  # ---------- CACHE ----------
+  cache:
+    image: redis:7-alpine
+    container_name: temperatura-cache
+    # appendonly: grava os dados em disco para não perder o contador ao reiniciar.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+    restart: unless-stopped
+
+# ---------- REDES ----------
+networks:
+  # Rede onde fica a aplicação exposta ao host.
+  frontend:
+  # Rede interna: só os containers conversam entre si, sem acesso externo.
+  backend:
+    internal: true
+
+# ---------- VOLUMES ----------
+volumes:
+  pgdata:
+  redisdata:

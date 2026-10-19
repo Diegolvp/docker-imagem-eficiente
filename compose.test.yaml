@@ -1,0 +1,60 @@
+# =============================================================================
+# Compose para TESTES AUTOMÁTICOS (usado no CI do GitHub Actions)
+#   docker compose -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from tests
+#
+# Sobe a mesma stack (app + db + cache) num ambiente descartável e roda o
+# container "tests", que faz requisições HTTP reais na API.
+# O código de saída do comando é o do pytest: 0 = passou, outro = falhou.
+# =============================================================================
+
+name: temperatura-test
+
+services:
+  app:
+    build: .
+    image: docker-imagem-eficiente:test
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/app
+      REDIS_URL: redis://cache:6379/0
+      CACHE_TTL: "60"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    # Sem "ports" e sem "restart": no teste nada é exposto e falhas não são mascaradas.
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # Dados em memória (tmpfs): cada execução começa com o banco limpo.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  cache:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Container que executa os testes contra a API.
+  tests:
+    build: ./tests
+    environment:
+      BASE_URL: http://app:8000
+    # Espera a aplicação ficar "healthy" (HEALTHCHECK do Dockerfile).
+    depends_on:
+      app:
+        condition: service_healthy

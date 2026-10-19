@@ -9,3 +9,6 @@ venv
 *.md
 Dockerfile*
 .dockerignore
+compose*.yaml
+tests
+db

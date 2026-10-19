@@ -1,8 +1,8 @@
-# Imagem Docker eficiente: API de conversão de temperatura (Python)
+# Imagem Docker eficiente + Docker Compose: API de conversão de temperatura (Python)
 
-API em Flask que converte Celsius para Fahrenheit e Kelvin, empacotada numa imagem Docker otimizada com **multi-stage build**.
+API em Flask que converte Celsius para Fahrenheit e Kelvin, empacotada numa imagem Docker otimizada com **multi-stage build** e orquestrada com **Docker Compose** junto com PostgreSQL e Redis.
 
-Rotas: `/` (informações), `/converter?celsius=25` (conversão) e `/health` (verificação de saúde).
+Rotas: `/` (informações + contador de visitas no Redis), `/converter?celsius=25` (conversão, com cache no Redis e gravação no Postgres), `/historico` (últimas 10 conversões) e `/health` (verifica app, banco e cache).
 
 ## Arquivos
 
@@ -13,47 +13,91 @@ Rotas: `/` (informações), `/converter?celsius=25` (conversão) e `/health` (ve
 | `Dockerfile` | Dockerfile otimizado e comentado (multi-stage, `python:3.12-slim`) |
 | `Dockerfile.naive` | Versão sem otimização, só para comparar o tamanho |
 | `.dockerignore` | Deixa de fora do contexto de build os arquivos desnecessários |
+| `compose.yaml` | Stack completa: app + PostgreSQL + Redis, com redes, volumes e restart |
+| `db/init.sql` | Cria a tabela `conversoes` na primeira subida do Postgres |
+| `compose.test.yaml` | Stack descartável para testes automáticos (CI) |
+| `tests/` | Testes de integração (pytest) e o Dockerfile que os executa |
+| `.github/workflows/ci.yml` | GitHub Actions: roda o compose de testes a cada push/PR |
+
+## Docker Compose
+
+| Serviço | Imagem | Rede | Volume | Restart |
+|---|---|---|---|---|
+| `app` | `docker-imagem-eficiente:1.0` (este Dockerfile) | `frontend` + `backend` | — | `unless-stopped` |
+| `db` | `postgres:16-alpine` | `backend` | `pgdata` | `unless-stopped` |
+| `cache` | `redis:7-alpine` | `backend` | `redisdata` | `unless-stopped` |
+
+- **Redes:** `frontend` é onde a API fica publicada na porta 8000. `backend` é `internal: true`: banco e cache não têm porta exposta nem acesso externo, e só a app fala com eles.
+- **Volumes:** `pgdata` e `redisdata` são volumes nomeados, então os dados sobrevivem a `docker compose down`. O `init.sql` entra como bind mount somente leitura.
+- **Ordem de subida:** `depends_on` com `condition: service_healthy` faz a app esperar o Postgres (`pg_isready`) e o Redis (`redis-cli ping`) ficarem saudáveis.
+- **Restart:** `unless-stopped` reinicia o container se ele cair ou se o Docker reiniciar, menos quando você o para de propósito.
+- **Variáveis:** usuário e senha do banco aceitam `POSTGRES_USER`, `POSTGRES_PASSWORD` e `POSTGRES_DB` (por um arquivo `.env`, por exemplo), com `app` como padrão.
+
+## Testes automáticos (CI)
+
+O `compose.test.yaml` sobe app, banco (em `tmpfs`, sempre limpo) e cache, e roda o container `tests`, que faz requisições reais na API. O comando termina com o código de saída do pytest:
+
+```bash
+docker compose -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from tests
+docker compose -f compose.test.yaml down -v
+```
+
+No GitHub, o workflow `.github/workflows/ci.yml` roda esse mesmo comando a cada push na `main` e em pull requests (aba **Actions**).
 
 ## Como executar no GitHub Codespaces
 
-1. Suba estes arquivos num repositório do GitHub.
-2. No repositório, clique em **Code → Codespaces → Create codespace on main**.
-3. No terminal do Codespace, rode:
+1. No repositório, clique em **Code → Codespaces → Create codespace on main**.
+2. No terminal do Codespace, rode:
 
 ```bash
-# 1. Construir a imagem otimizada
-docker build -t app-otimizada .
+# 1. Construir a imagem e subir a stack inteira em segundo plano
+docker compose up -d --build
 
-# 2. (Comparação) Construir a imagem sem otimização
-docker build -f Dockerfile.naive -t app-naive .
+# 2. Ver os 3 serviços (aguarde ~10 s até todos ficarem "healthy")
+docker compose ps
 
-# 3. Comparar os tamanhos
-docker images | grep app-
-
-# 4. Executar o container em segundo plano
-docker run -d --name app -p 8000:8000 app-otimizada
-
-# 5. Testar se está funcionando
+# 3. Testar a API
 curl http://localhost:8000/
-curl "http://localhost:8000/converter?celsius=25"
+curl "http://localhost:8000/converter?celsius=25"   # "origem": "calculado"
+curl "http://localhost:8000/converter?celsius=25"   # "origem": "cache" (Redis)
+curl http://localhost:8000/historico                # gravado no Postgres
 
-# 6. Ver o status (após ~5 s deve aparecer "healthy") e os logs
-docker ps
-docker logs app
+# 4. Ver redes, volumes e logs
+docker network ls | grep docker-imagem-eficiente
+docker volume ls | grep docker-imagem-eficiente
+docker compose logs app
 
-# 7. Confirmar que não roda como root
-docker exec app whoami
+# 5. Restart: derrubar o Gunicorn (PID 1) por dentro e ver o Docker reiniciar o container
+docker exec temperatura-app python -c "import os, signal; os.kill(1, signal.SIGTERM)"
+sleep 5
+docker compose ps app
+docker inspect -f 'RestartCount={{.RestartCount}}' temperatura-app   # deve mostrar 1
+#   (docker stop/kill contam como parada manual, e aí o unless-stopped não reinicia)
+
+# 6. Persistência: derrubar e subir de novo; o histórico continua lá
+docker compose down
+docker compose up -d
+sleep 10 && curl http://localhost:8000/historico
+
+# 7. Rodar os testes automáticos (o mesmo do CI)
+docker compose -f compose.test.yaml up --build --abort-on-container-exit --exit-code-from tests
+docker compose -f compose.test.yaml down -v
+
+# 8. Limpar tudo
+docker compose down -v
 ```
 
-Saída esperada da conversão:
+> **Evidência para entregar:** prints do terminal com os passos 2, 3, 5, 6 e 7 (serviços `healthy`, respostas do `curl`, restart automático, histórico após o `down`/`up` e `6 passed` nos testes).
 
-```json
-{"celsius":25.0,"fahrenheit":77.0,"kelvin":298.15}
+3. **Finalize o Codespace** para não gastar as horas mensais: no terminal, `gh codespace stop`, ou no GitHub em **Code → Codespaces → ⋯ → Stop codespace** (use **Delete** se não for mais usar).
+
+### Comparação de tamanho (atividade anterior)
+
+```bash
+docker build -t app-otimizada .
+docker build -f Dockerfile.naive -t app-naive .
+docker images | grep app-
 ```
-
-> **Evidência para entregar:** tire o print do terminal mostrando os passos 3, 5 e 6 (tamanhos das imagens, resposta do `curl` e o container com status `healthy`).
-
-Para limpar: `docker rm -f app`
 
 ## Escolhas de otimização
 
